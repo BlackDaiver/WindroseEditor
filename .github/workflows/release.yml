@@ -3,11 +3,11 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'              # Runs automatically when you create a tag like v1.0.0
+      - 'v*'
 
 jobs:
   build:
-    runs-on: windows-latest   # Build on Windows to target win-x64
+    runs-on: windows-latest
 
     steps:
       - name: Checkout code
@@ -19,7 +19,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore WindroseEditor.sln
+        run: dotnet restore WindroseEditor.sln --disable-parallel --no-cache
 
       - name: Publish application
         run: |
@@ -31,12 +31,14 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:DebugType=none `
             -p:DebugSymbols=false `
+            --disable-parallel `
+            --no-restore `
             -o ./publish
 
-      - name: Create ZIP archive with release files
+      - name: Create ZIP archive
         run: Compress-Archive -Path ./publish/* -DestinationPath ./WindroseEditor-Release.zip
 
-      - name: Create GitHub Release and upload asset
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           files: ./WindroseEditor-Release.zip
