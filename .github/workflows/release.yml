@@ -19,7 +19,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore WindroseEditor.sln --disable-parallel --no-cache
+        run: dotnet restore WindroseEditor.sln -r win-x64 --disable-parallel --no-cache
 
       - name: Publish application
         run: |
@@ -31,7 +31,6 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:DebugType=none `
             -p:DebugSymbols=false `
-            --disable-parallel `
             --no-restore `
             -o ./publish
 
