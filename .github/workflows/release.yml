@@ -1,0 +1,43 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'              # Runs automatically when you create a tag like v1.0.0
+
+jobs:
+  build:
+    runs-on: windows-latest   # Build on Windows to target win-x64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore WindroseEditor.sln
+
+      - name: Publish application
+        run: |
+          dotnet publish WindroseEditor.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
+            -o ./publish
+
+      - name: Create ZIP archive with release files
+        run: Compress-Archive -Path ./publish/* -DestinationPath ./WindroseEditor-Release.zip
+
+      - name: Create GitHub Release and upload asset
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./WindroseEditor-Release.zip
+          generate_release_notes: true
