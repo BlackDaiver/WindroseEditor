@@ -14,8 +14,10 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
   </ItemGroup>
   <ItemGroup>
-    <None Update="windrose_items.db">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+	<None Update="windrose_items.db">
+	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+	  <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+	</None>
   </ItemGroup>
 </Project>
