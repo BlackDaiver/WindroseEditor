@@ -72,9 +72,14 @@ namespace WindroseEditor
         int _modBackpack = 0, _modActionBar = 3;
         int _modArmor    = 2, _modAccessory = 4, _modAmmo = 1;
 
+        /// <summary>Фиксированное число слотов Панели действий.</summary>
+        const int ActionBarSlotCount = 8;
+        /// <summary>Базовое число слотов рюкзака без надетого предмета-рюкзака.</summary>
+        const int BaseBackpackSlots = 16;
+
         public MainForm()
         {
-            Text          = "Windrose — Редактор инвентаря  v1.0.0";
+            Text          = "Windrose — Редактор инвентаря  v1.0.1";
             Size          = new Size(1000, 750);
             MinimumSize   = new Size(820, 560);
             BackColor     = Theme.BG2;
@@ -433,21 +438,55 @@ namespace WindroseEditor
             if (_modAmmo      < 0 && mods.Count > 1) _modAmmo      = mods[1].Index;
         }
 
+        // ── Backpack helpers ─────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Возвращает ItemEntry рюкзака, надетого в слот «Сумка» (аксессуар, индекс 2),
+        /// или null если рюкзак не надет или база предметов не загружена.
+        /// </summary>
+        ItemEntry? GetEquippedBagItem()
+        {
+            if (_save == null || _modAccessory < 0 || !ItemDatabase.Loaded) return null;
+            var s = _save.GetSlots(_modAccessory).FirstOrDefault(s => s.SlotIndex == 2 && !s.IsEmpty);
+            if (s == null) return null;
+            return ItemDatabase.Items.FirstOrDefault(i =>
+                i.ItemParamsPath.Equals(s.ItemParams, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// Возвращает эффективное число слотов рюкзака:
+        ///   базовые 16 + ExtraSlots надетого рюкзака.
+        /// Возвращает 0 (= показывать все слоты из сохранения) если база v2 или не загружена.
+        /// </summary>
+        int GetEffectiveBackpackSlotCount()
+        {
+            if (_save == null) return 0;
+            // Без базы v3 не знаем ExtraSlots — не ограничиваем число слотов
+            if (!ItemDatabase.Loaded || ItemDatabase.SchemaVersion < 3) return 0;
+            var bag = GetEquippedBagItem();
+            if (bag == null) return BaseBackpackSlots;
+            // bag.ExtraSlots = 0 означает, что у этого рюкзака нет доп. слотов (или старый DB)
+            return bag.ExtraSlots > 0 ? BaseBackpackSlots + bag.ExtraSlots : BaseBackpackSlots;
+        }
+
         void Rebuild()
         {
             if (_save == null) return;
-            Fill(_actionBarSec, _modActionBar, 8);
-            Fill(_backpackSec,  _modBackpack,  8);
-            // Фиксированные секции: запрещены добавление и редактирование, только удаление
+            Fill(_actionBarSec, _modActionBar, 8, fixedCount: ActionBarSlotCount);
+            Fill(_backpackSec,  _modBackpack,  8, fixedCount: GetEffectiveBackpackSlotCount());
+            // Фиксированные секции с фильтрацией по допустимому типу предметов
             Fill(_equipSec,     _modArmor,     2,
-                 fixedCount: SlotConstraints.ArmorSlotCount,     readOnly: true,
-                 getSlotName: SlotConstraints.GetArmorName);
+                 fixedCount:       SlotConstraints.ArmorSlotCount,
+                 getSlotName:      SlotConstraints.GetArmorName,
+                 getSlotItemTypes: SlotConstraints.GetArmorItemTypes);
             Fill(_accessorySec, _modAccessory, 2,
-                 fixedCount: SlotConstraints.AccessorySlotCount, readOnly: true,
-                 getSlotName: SlotConstraints.GetAccessoryName);
+                 fixedCount:          SlotConstraints.AccessorySlotCount,
+                 getSlotName:         SlotConstraints.GetAccessoryName,
+                 getSlotCategories:   SlotConstraints.GetAccessoryCategories);
             Fill(_ammoSec,      _modAmmo,      2,
-                 fixedCount: SlotConstraints.AmmoSlotCount,      readOnly: true,
-                 getSlotName: SlotConstraints.GetAmmoName);
+                 fixedCount:       SlotConstraints.AmmoSlotCount,
+                 getSlotName:      SlotConstraints.GetAmmoName,
+                 getSlotItemTypes: SlotConstraints.GetAmmoItemTypes);
 
             // trigger layout refresh
             _backpackSec.Parent?.PerformLayout();
@@ -463,7 +502,9 @@ namespace WindroseEditor
         /// </summary>
         void Fill(InvSection sec, int mod, int cols,
                   int fixedCount = 0, bool readOnly = false,
-                  Func<int, string?>? getSlotName = null)
+                  Func<int, string?>?   getSlotName       = null,
+                  Func<int, string[]?>? getSlotCategories = null,
+                  Func<int, string[]?>? getSlotItemTypes  = null)
         {
             InventorySlot[] slots;
 
@@ -494,13 +535,18 @@ namespace WindroseEditor
             }
 
             sec.SetSlots(slots, cols, _tip,
-                readOnly ? null          : (Action<InventorySlot>)(s => AddItem(s)),
+                readOnly ? null : (Action<InventorySlot>)(s =>
+                    AddItem(s,
+                        getSlotCategories?.Invoke(s.SlotIndex),
+                        getSlotItemTypes ?.Invoke(s.SlotIndex))),
                 s => RemoveItem(s),
-                readOnly ? null          : (Action<InventorySlot>)(s => EditItem(s)),
+                readOnly ? null : (Action<InventorySlot>)(s => EditItem(s)),
                 getSlotName);
         }
 
-        void AddItem(InventorySlot slot)
+        void AddItem(InventorySlot slot,
+                     string[]? allowedCategories = null,
+                     string[]? allowedItemTypes  = null)
         {
             if (_save == null) return;
             if (!ItemDatabase.Loaded)
@@ -515,7 +561,8 @@ namespace WindroseEditor
                 if (!string.IsNullOrEmpty(e)) { SetStatus(e, warn: true); return; }
             }
 
-            using var dlg = new AddItemDialog(slot.ModuleIndex, slot.SlotIndex);
+            using var dlg = new AddItemDialog(slot.ModuleIndex, slot.SlotIndex,
+                                              allowedCategories, allowedItemTypes);
             if (dlg.ShowDialog(this) != DialogResult.OK || dlg.SelectedItem == null) return;
 
             if (!_save.AddItem(slot.ModuleIndex, slot.SlotIndex,
@@ -525,13 +572,52 @@ namespace WindroseEditor
 
             string qualInfo = dlg.SelectedQuality > 0 ? $"  кач.{dlg.SelectedQuality}" : "";
             SetStatus($"Добавлено: {dlg.SelectedItem.DisplayName}  ур.{dlg.SelectedLevel}{qualInfo}  ×{dlg.SelectedCount}");
-            DetectRoles();
             Rebuild();
         }
 
         void RemoveItem(InventorySlot slot)
         {
             if (_save == null) return;
+
+            // ── Защита: нельзя снять рюкзак, пока доп. слоты заняты ────────────
+            if (slot.ModuleIndex == _modAccessory && slot.SlotIndex == 2)
+            {
+                var bag = GetEquippedBagItem();
+                if (bag != null && bag.ExtraSlots > 0 && _modBackpack >= 0)
+                {
+                    var blocked = _save.GetSlots(_modBackpack)
+                        .Where(s => s.SlotIndex >= BaseBackpackSlots && !s.IsEmpty)
+                        .ToList();
+
+                    if (blocked.Count > 0)
+                    {
+                        int last = BaseBackpackSlots + bag.ExtraSlots - 1;
+                        var lines = blocked.Select(s =>
+                        {
+                            var item = ItemDatabase.Items.FirstOrDefault(i =>
+                                i.ItemParamsPath.Equals(s.ItemParams,
+                                    StringComparison.OrdinalIgnoreCase));
+                            string name = item?.DisplayName ?? s.InternalName;
+                            return AppLanguage.T(
+                                $"  • Слот {s.SlotIndex}: {name}",
+                                $"  • Slot {s.SlotIndex}: {name}");
+                        });
+
+                        MessageBox.Show(
+                            AppLanguage.T(
+                                $"Нельзя снять рюкзак — дополнительные слоты {BaseBackpackSlots}–{last} содержат предметы:\n\n"
+                                + string.Join("\n", lines)
+                                + "\n\nСначала уберите эти предметы из рюкзака.",
+                                $"Cannot remove backpack — additional slots {BaseBackpackSlots}–{last} contain items:\n\n"
+                                + string.Join("\n", lines)
+                                + "\n\nPlease move or delete these items first."),
+                            AppLanguage.T("Невозможно снять рюкзак", "Cannot remove backpack"),
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+            }
+
             string msg = AppLanguage.T(
                 $"Удалить '{slot.InternalName}' из слота {slot.SlotIndex}?",
                 $"Remove '{slot.InternalName}' from slot {slot.SlotIndex}?");
@@ -540,7 +626,6 @@ namespace WindroseEditor
                 return;
             _save.RemoveItem(slot.ModuleIndex, slot.SlotIndex);
             SetStatus(AppLanguage.T($"Удалено: слот {slot.SlotIndex}", $"Removed: slot {slot.SlotIndex}"));
-            DetectRoles();
             Rebuild();
         }
 
@@ -593,7 +678,7 @@ namespace WindroseEditor
             _langBtn.ForeColor = AppLanguage.IsRu ? Theme.Accent : Theme.Warn;
 
             // ── Заголовок окна ───────────────────────────────────────────────
-            Text = $"Windrose — {AppLanguage.T("Редактор инвентаря", "Inventory Editor")}  v1.0.0";
+            Text = $"Windrose — {AppLanguage.T("Редактор инвентаря", "Inventory Editor")}  v1.0.1";
 
             // ── Кнопки тулбара ────────────────────────────────────────────────
             _loadBtn.Text = AppLanguage.T("Загрузить", "Load");

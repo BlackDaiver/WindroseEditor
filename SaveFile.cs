@@ -706,7 +706,26 @@ namespace WindroseEditor
                 return false;
             var mod = modVal.AsDocument();
             if (!mod.TryGetValue("Slots", out var sv) || sv == null || !sv.IsDocument) return false;
-            sv.AsDocument().Remove(slotIndex.ToString());
+            var slots    = sv.AsDocument();
+            string slotKey = slotIndex.ToString();
+
+            // Не удаляем запись слота из BSON — игра использует её наличие,
+            // чтобы знать, что слот существует и должен отображаться в UI.
+            // Вместо этого оставляем пустой ItemsStack (ItemParams = "").
+            if (!slots.TryGetValue(slotKey, out var slotBsonVal) || slotBsonVal == null || !slotBsonVal.IsDocument)
+                return false;
+
+            var emptyItem = new BsonDocument();
+            emptyItem["Attributes"] = BsonValue.FromArray(new BsonDocument());
+            emptyItem["Effects"]    = BsonValue.FromArray(new BsonDocument());
+            emptyItem["ItemId"]     = BsonValue.FromString("");
+            emptyItem["ItemParams"] = BsonValue.FromString("");
+
+            var emptyStack = new BsonDocument();
+            emptyStack["Count"] = BsonValue.FromInt32(0);
+            emptyStack["Item"]  = BsonValue.FromDocument(emptyItem);
+
+            slotBsonVal.AsDocument()["ItemsStack"] = BsonValue.FromDocument(emptyStack);
             IsModified = true;
             return true;
         }

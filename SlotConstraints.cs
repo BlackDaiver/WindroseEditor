@@ -27,5 +27,45 @@ namespace WindroseEditor
         public static string? GetArmorName    (int i) => i >= 0 && i < _armorRu.Length     ? AppLanguage.T(_armorRu[i],     _armorEn[i])     : null;
         public static string? GetAccessoryName(int i) => i >= 0 && i < _accessoryRu.Length ? AppLanguage.T(_accessoryRu[i], _accessoryEn[i]) : null;
         public static string? GetAmmoName     (int i) => i >= 0 && i < _ammoRu.Length      ? AppLanguage.T(_ammoRu[i],      _ammoEn[i])      : null;
+
+        // ── Допустимые ItemType-теги по слоту (для фильтрации AddItemDialog) ─
+
+        /// <summary>
+        /// Снаряжение: каждый слот принимает строго один ItemType.
+        ///   0 – Head  1 – Torso  2 – Legs  3 – Hands  4 – Feets
+        /// </summary>
+        public static string[]? GetArmorItemTypes(int i) => i switch
+        {
+            0 => new[] { "Inventory.ItemType.Armor.Head"  },
+            1 => new[] { "Inventory.ItemType.Armor.Torso" },
+            2 => new[] { "Inventory.ItemType.Armor.Legs"  },
+            3 => new[] { "Inventory.ItemType.Armor.Hands" },
+            4 => new[] { "Inventory.ItemType.Armor.Feets" },
+            _ => null,
+        };
+
+        /// <summary>
+        /// Аксессуары: фильтр по Category (Ring / Necklace / Backpack).
+        ///   0 – Ring  1 – Necklace  2 – Backpack
+        /// </summary>
+        public static string[]? GetAccessoryCategories(int i) => i switch
+        {
+            0 => new[] { "Ring"     },
+            1 => new[] { "Necklace" },
+            2 => new[] { "Backpack" },
+            _ => null,
+        };
+
+        /// <summary>
+        /// Боеприпасы: каждый слот принимает строго один ItemType.
+        ///   0 – GunFireProjectile (пули)
+        ///   1 – Gunpowder         (порох)
+        /// </summary>
+        public static string[]? GetAmmoItemTypes(int i) => i switch
+        {
+            0 => new[] { "Inventory.ItemType.Ammo.GunFireProjectile" },
+            1 => new[] { "Inventory.ItemType.Ammo.Gunpowder"         },
+            _ => null,
+        };
     }
 }

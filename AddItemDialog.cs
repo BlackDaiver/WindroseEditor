@@ -38,12 +38,27 @@ namespace WindroseEditor
         Label         _infoLabel   = null!;
         Button        _addBtn      = null!;
 
-        List<ItemEntry> _filteredItems = new();
+        List<ItemEntry> _filteredItems   = new();
+        string[]?       _allowedCategories;
+        string[]?       _allowedItemTypes;
         Panel? bottomPanel;
 
         // ── Constructor ──────────────────────────────────────────────────
-        public AddItemDialog(int moduleIndex, int slotIndex)
+        /// <param name="allowedCategories">
+        /// Если задан — показывать только предметы этих категорий.
+        /// Комбо категорий будет заблокировано.
+        /// </param>
+        /// <param name="allowedItemTypes">
+        /// Если задан — показывать только предметы с одним из этих ItemType-тегов.
+        /// Имеет приоритет над allowedCategories для фильтрации.
+        /// </param>
+        public AddItemDialog(int moduleIndex, int slotIndex,
+                             string[]? allowedCategories = null,
+                             string[]? allowedItemTypes  = null)
         {
+            _allowedCategories = allowedCategories;
+            _allowedItemTypes  = allowedItemTypes;
+
             Text = AppLanguage.T($"Добавить предмет  —  слот {slotIndex}",
                                   $"Add item  —  slot {slotIndex}");
 
@@ -57,6 +72,22 @@ namespace WindroseEditor
 
             BuildLayout();
             RebuildCatCodes();
+
+            // Если фильтр по категории задан — предвыбрать и заблокировать комбо
+            if (_allowedCategories != null && _allowedCategories.Length == 1)
+            {
+                int idx = _catCodes.IndexOf(_allowedCategories[0]);
+                if (idx >= 0)
+                {
+                    _catBox.SelectedIndex = idx;
+                    _catBox.Enabled       = false;
+                }
+            }
+
+            // Если фильтр по ItemType задан — комбо категорий не имеет смысла
+            if (_allowedItemTypes != null && _allowedItemTypes.Length > 0)
+                _catBox.Enabled = false;
+
             ApplyFilter();
         }
 
@@ -292,7 +323,18 @@ namespace WindroseEditor
             int ci = _catBox.SelectedIndex;
             if (ci > 0 && ci < _catCodes.Count) cat = _catCodes[ci];
 
-            _filteredItems = ItemDatabase.Filter(search, rarity, cat).ToList();
+            var filtered = ItemDatabase.Filter(search, rarity, cat);
+
+            // Ограничитель по ItemType (приоритет — снаряжение/боеприпасы)
+            if (_allowedItemTypes != null && _allowedItemTypes.Length > 0)
+                filtered = filtered.Where(i =>
+                    _allowedItemTypes.Contains(i.ItemType, StringComparer.OrdinalIgnoreCase));
+            // Ограничитель по категории (аксессуары)
+            else if (_allowedCategories != null && _allowedCategories.Length > 0)
+                filtered = filtered.Where(i =>
+                    _allowedCategories.Contains(i.Category, StringComparer.OrdinalIgnoreCase));
+
+            _filteredItems = filtered.ToList();
             PopulateGrid();
         }
 
