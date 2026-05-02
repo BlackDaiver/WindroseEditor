@@ -54,6 +54,7 @@ namespace WindroseEditor
         TextBox _pathBox   = null!;
         Button  _loadBtn   = null!;
         Button  _saveBtn   = null!;
+        Button  _fleetBtn  = null!;
         Button  _dbBtn     = null!;
         Button  _langBtn   = null!;
         Label   _statusLbl = null!;
@@ -114,6 +115,12 @@ namespace WindroseEditor
             _saveBtn.Enabled = false;
             _saveBtn.Click   += (_, _) => Save();
 
+            // Fleet management button
+            _fleetBtn = Btn("Флот", 60, Color.FromArgb(249, 200, 50), Color.FromArgb(45, 30, 0));
+            _fleetBtn.Enabled = false;
+            _fleetBtn.Click   += (_, _) => OpenFleetDialog();
+            _fleetBtn.Visible = false; // Hide Fleet menu
+
             // Кнопка базы данных предметов (правый край)
             _dbBtn = Btn("База предметов…", 130, Theme.Dim, Theme.SlotBg);
             _dbBtn.Click += (_, _) => LoadDb();
@@ -122,14 +129,15 @@ namespace WindroseEditor
             _langBtn = Btn("RU", 36, Theme.Accent, Color.FromArgb(0, 45, 70));
             _langBtn.Click += (_, _) => ToggleLanguage();
 
-            top.Controls.AddRange(new Control[] { _pathBox, browseBtn, _loadBtn, _saveBtn, _langBtn, _dbBtn });
+            top.Controls.AddRange(new Control[] { _pathBox, browseBtn, _loadBtn, _saveBtn, _fleetBtn, _langBtn, _dbBtn });
             top.Layout += (_, _) =>
             {
                 int y = (top.ClientSize.Height - 24) / 2;
                 int r = top.ClientSize.Width - 10;
                 _dbBtn.Location     = new Point(r - _dbBtn.Width, y);
                 _langBtn.Location   = new Point(_dbBtn.Left - _langBtn.Width - 6, y);
-                _saveBtn.Location   = new Point(_langBtn.Left - _saveBtn.Width - 8, y);
+                _fleetBtn.Location  = new Point(_langBtn.Left - _fleetBtn.Width - 6, y);
+                _saveBtn.Location   = new Point(_fleetBtn.Left - _saveBtn.Width - 8, y);
                 _loadBtn.Location   = new Point(_saveBtn.Left - _loadBtn.Width - 4, y);
                 browseBtn.Location  = new Point(_loadBtn.Left - browseBtn.Width - 6, y);
                 _pathBox.Location   = new Point(10, y + 1);
@@ -355,7 +363,8 @@ namespace WindroseEditor
                 SetStatus($"Загружено  ·  {_save.PlayerGuid}");
                 DetectRoles();
                 Rebuild();
-                _saveBtn.Enabled = true;
+                _saveBtn.Enabled  = true;
+                _fleetBtn.Enabled = true;
             }
             finally { Cursor = Cursors.Default; }
         }
@@ -651,6 +660,24 @@ namespace WindroseEditor
             Rebuild();
         }
 
+        void OpenFleetDialog()
+        {
+            if (_save == null) return;
+
+            using var dlg = new ShipDialog(_save);
+            dlg.ShowDialog(this);
+
+            // Reflect any fleet changes in status + save button
+            if (_save.IsModified)
+            {
+                _saveBtn.Enabled = true;
+                int count = _save.Ships.Count(s => !s.IsDeleted && !s.IsBoat);
+                SetStatus(AppLanguage.T(
+                    $"Флот обновлён  ·  кораблей (без лодки): {count}",
+                    $"Fleet updated  ·  ships (excl. boat): {count}"));
+            }
+        }
+
         void ToggleLanguage()
         {
             AppLanguage.IsRu = !AppLanguage.IsRu;
@@ -681,9 +708,10 @@ namespace WindroseEditor
             Text = $"Windrose — {AppLanguage.T("Редактор инвентаря", "Inventory Editor")}  v1.0.1";
 
             // ── Кнопки тулбара ────────────────────────────────────────────────
-            _loadBtn.Text = AppLanguage.T("Загрузить", "Load");
-            _saveBtn.Text = AppLanguage.T("Сохранить", "Save");
-            _dbBtn.Text   = AppLanguage.T("База предметов…", "Item Database…");
+            _loadBtn.Text  = AppLanguage.T("Загрузить",       "Load");
+            _saveBtn.Text  = AppLanguage.T("Сохранить",       "Save");
+            _fleetBtn.Text = AppLanguage.T("Флот",            "Fleet");
+            _dbBtn.Text    = AppLanguage.T("База предметов…", "Item Database…");
 
             // ── Placeholder путевого поля ─────────────────────────────────────
             _pathBox.PlaceholderText = AppLanguage.T(

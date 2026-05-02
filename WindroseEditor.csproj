@@ -9,6 +9,8 @@
     <RootNamespace>WindroseEditor</RootNamespace>
     <Platforms>x64</Platforms>
     <ApplicationIcon>WindroseEditor.ico</ApplicationIcon>
+    <!-- Single-file: embed native DLLs and self-extract to temp on launch -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
@@ -16,8 +18,7 @@
   <ItemGroup>
 	<None Update="rocksdb.dll">
 	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-		<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-		<ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+	  <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 	</None>
 	<None Update="windrose_items.db">
 	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

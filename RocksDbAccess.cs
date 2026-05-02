@@ -25,7 +25,8 @@ namespace WindroseEditor
 
         // ── Known Column Family IDs (from MANIFEST) ────────────────────────
         public const int CF_PLAYER   = 2;   // R5BLPlayer
-        public const int CF_BUILDING = 4;   // R5BLBuilding (ships)
+        public const int CF_SHIP     = 3;   // R5BLShip     (ships)
+        public const int CF_BUILDING = 4;   // R5BLBuilding (world buildings — NOT ships)
 
         // ──────────────────────────────────────────────────────────────────
         // CRC32C (Castagnoli) — RocksDB uses this, NOT standard CRC32-IEEE
@@ -210,6 +211,127 @@ namespace WindroseEditor
         }
 
         // ──────────────────────────────────────────────────────────────────
+        // WAL Ship Entries — reads CF_SHIP puts and deletes from all WAL logs.
+        // SSTs are only updated when the game flushes/compacts; until then the
+        // WAL is the authoritative source for edits made via this editor.
+        // ──────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Scans all WAL log files and returns ship-level changes that have not yet
+        /// been compacted into SST files:
+        /// <list type="bullet">
+        ///   <item><c>shipPuts</c>   — GUID → raw BSON for ships added via WAL Put.</item>
+        ///   <item><c>shipDeletes</c>— GUIDs of ships removed via WAL Delete tombstone.</item>
+        /// </list>
+        /// The two sets are mutually exclusive: a later Put un-deletes a GUID and vice versa.
+        /// </summary>
+        public static (Dictionary<string, byte[]> shipPuts, HashSet<string> shipDeletes)
+            ReadShipWalEntries(string saveDir)
+        {
+            var shipPuts    = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            var shipDeletes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var logFiles = Directory.GetFiles(saveDir, "*.log")
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (var logFile in logFiles)
+            {
+                byte[] raw;
+                try { raw = File.ReadAllBytes(logFile); }
+                catch { continue; }
+
+                // Reassemble payload from 32 KB blocks
+                using var ps = new MemoryStream();
+                int pos = 0;
+                while (pos + 7 <= raw.Length)
+                {
+                    int  length = BitConverter.ToUInt16(raw, pos + 4);
+                    byte rtype  = raw[pos + 6];
+                    int  start  = pos + 7;
+                    int  avail  = Math.Min(length, raw.Length - start);
+                    if (rtype >= 1 && rtype <= 4) ps.Write(raw, start, avail);
+                    pos += BlockSize;
+                }
+
+                byte[] payload = ps.ToArray();
+                pos = 0;
+
+                while (pos + 12 <= payload.Length)
+                {
+                    try
+                    {
+                        long batchSeq   = BitConverter.ToInt64(payload, pos);
+                        int  batchCount = BitConverter.ToInt32(payload, pos + 8);
+                        int  p          = pos + 12;
+
+                        for (int i = 0; i < batchCount && p < payload.Length; i++)
+                        {
+                            byte etype = payload[p++];
+
+                            if (etype == 0x05) // kTypeColumnFamilyValue
+                            {
+                                (long cfId,   int np1) = ReadVarint(payload, p); p = np1;
+                                (long keyLen, int np2) = ReadVarint(payload, p); p = np2;
+
+                                string? guid = null;
+                                if (cfId == CF_SHIP && keyLen == 32 && p + 32 <= payload.Length)
+                                    guid = System.Text.Encoding.ASCII
+                                               .GetString(payload, p, 32).ToUpperInvariant();
+                                p += (int)keyLen;
+
+                                (long valLen, int np3) = ReadVarint(payload, p); p = np3;
+                                if (guid != null && valLen >= 4
+                                    && p + (int)valLen <= payload.Length)
+                                {
+                                    byte[] val = new byte[(int)valLen];
+                                    Buffer.BlockCopy(payload, p, val, 0, (int)valLen);
+                                    if (BitConverter.ToInt32(val, 0) == val.Length)
+                                    {
+                                        shipPuts[guid] = val;
+                                        shipDeletes.Remove(guid);
+                                    }
+                                }
+                                p += (int)valLen;
+                            }
+                            else if (etype == 0x04) // kTypeColumnFamilyDeletion
+                            {
+                                (long cfId,   int np1) = ReadVarint(payload, p); p = np1;
+                                (long keyLen, int np2) = ReadVarint(payload, p); p = np2;
+                                if (cfId == CF_SHIP && keyLen == 32
+                                    && p + 32 <= payload.Length)
+                                {
+                                    string guid = System.Text.Encoding.ASCII
+                                                      .GetString(payload, p, 32).ToUpperInvariant();
+                                    shipDeletes.Add(guid);
+                                    shipPuts.Remove(guid);
+                                }
+                                p += (int)keyLen;
+                            }
+                            else if (etype == 0x01) // kTypeValue (default CF)
+                            {
+                                (long keyLen, int np1) = ReadVarint(payload, p); p = np1;
+                                p += (int)keyLen;
+                                (long valLen, int np2) = ReadVarint(payload, p); p = np2;
+                                p += (int)valLen;
+                            }
+                            else if (etype == 0x00) // kTypeDeletion (default CF)
+                            {
+                                (long keyLen, int np1) = ReadVarint(payload, p); p = np1;
+                                p += (int)keyLen;
+                            }
+                            else break; // unknown type — stop this batch
+                        }
+                        pos = p;
+                    }
+                    catch { break; }
+                }
+            }
+
+            return (shipPuts, shipDeletes);
+        }
+
+        // ──────────────────────────────────────────────────────────────────
         // MANIFEST Parser — extracts last_sequence and log_number
         // ──────────────────────────────────────────────────────────────────
         public static (long LastSeq, long NextFileNum, long LogNum) ParseManifest(string saveDir)
@@ -253,6 +375,109 @@ namespace WindroseEditor
                 }
             }
             return (lastSeq, nextFileNum, logNum);
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // MANIFEST CF Mapping — SST file-number → column-family ID
+        // ──────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Parses the MANIFEST to return a mapping of SST file-number → CF ID.
+        /// Returns an empty dict on failure (caller should treat unknowns as "scan anyway").
+        /// </summary>
+        public static Dictionary<long, int> ParseManifestCfMapping(string saveDir)
+        {
+            var mapping  = new Dictionary<long, int>();
+            var manifests = Directory.GetFiles(saveDir, "MANIFEST-*")
+                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (manifests.Length == 0) return mapping;
+
+            byte[] raw;
+            try { raw = File.ReadAllBytes(manifests[^1]); }
+            catch { return mapping; }
+
+            int currentCf = 0;
+            int pos = 0;
+
+            while (pos < raw.Length)
+            {
+                if (pos + 7 > raw.Length) break;
+                int length     = BitConverter.ToUInt16(raw, pos + 4);
+                int chunkStart = pos + 7;
+                int chunkLen   = Math.Min(length, raw.Length - chunkStart);
+                byte[] chunk   = new byte[chunkLen];
+                Buffer.BlockCopy(raw, chunkStart, chunk, 0, chunkLen);
+                pos += 7 + length;
+                int rem = pos % 32768;
+                if (rem > 0 && rem < 7) pos += 32768 - rem;
+
+                ParseVersionEditChunk(chunk, ref currentCf, mapping);
+            }
+            return mapping;
+        }
+
+        static void ParseVersionEditChunk(byte[] chunk, ref int currentCf,
+                                           Dictionary<long, int> mapping)
+        {
+            int p = 0;
+            while (p < chunk.Length)
+            {
+                int saved = p;
+                try
+                {
+                    (long tag, int np) = ReadVarint(chunk, p); p = np;
+                    switch (tag)
+                    {
+                        case 200: // kColumnFamily — sets CF context for this VersionEdit
+                        {
+                            (long cfId, int np2) = ReadVarint(chunk, p); p = np2;
+                            currentCf = (int)cfId;
+                            break;
+                        }
+                        case 7: // kNewFile: level, fileNum, fileSize, smallestKey, largestKey
+                        {
+                            (long _lvl,    int np2) = ReadVarint(chunk, p); p = np2;
+                            (long fileNum, int np3) = ReadVarint(chunk, p); p = np3;
+                            mapping[fileNum] = currentCf;
+                            // Skip file_size + smallest key + largest key so we can
+                            // continue parsing further records in the same chunk.
+                            (long _sz,   int np4) = ReadVarint(chunk, p); p = np4;
+                            (long skLen, int np5) = ReadVarint(chunk, p); p = np5;
+                            p += (int)skLen;
+                            (long lkLen, int np6) = ReadVarint(chunk, p); p = np6;
+                            p += (int)lkLen;
+                            break;
+                        }
+                        case 15:  // kNewFile4
+                        case 103: // kNewFile5 (RocksDB 7.x+) — record fileNum then stop;
+                                  // trailing fields are version-dependent and complex.
+                        {
+                            (long _lvl,    int np2) = ReadVarint(chunk, p); p = np2;
+                            (long fileNum, int np3) = ReadVarint(chunk, p); p = np3;
+                            mapping[fileNum] = currentCf;
+                            return; // remaining fields are complex — stop this chunk
+                        }
+                        case 1:   // kComparatorName — length-prefixed string
+                        case 201: // kColumnFamilyAdd — length-prefixed string
+                        {
+                            (long sLen, int np2) = ReadVarint(chunk, p); p = np2;
+                            p += (int)sLen;
+                            break;
+                        }
+                        case 2: case 3: case 4:  // logNum, nextFileNum, lastSeq
+                        case 9: case 10:         // kDBId, kMinLogNumberToKeep
+                        case 203: case 300: case 301: // kMaxColumnFamily, kInAtomicGroup, kMinLogNum
+                        {
+                            (long _, int np2) = ReadVarint(chunk, p); p = np2;
+                            break;
+                        }
+                        default:
+                            p = saved + 1; // unknown tag — advance one byte
+                            break;
+                    }
+                }
+                catch { p = saved + 1; }
+            }
         }
 
         // ──────────────────────────────────────────────────────────────────
@@ -361,7 +586,9 @@ namespace WindroseEditor
         }
 
         // ──────────────────────────────────────────────────────────────────
-        // R5BLBuilding CF Scanner — finds ship documents owned by a player.
+        // R5BLShip CF Scanner — finds ship documents owned by a player.
+        // Only SST files mapped to CF_SHIP (3) are scanned; CF_BUILDING (4)
+        // SSTs are skipped to prevent ghost ships from appearing.
         // Ships use the same 40-byte key format as players (32-byte GUID +
         // 8-byte InternalKey suffix) and BSON starts with document length.
         // ──────────────────────────────────────────────────────────────────
@@ -374,8 +601,23 @@ namespace WindroseEditor
             byte[] pgBytes = System.Text.Encoding.ASCII.GetBytes(
                 playerGuid.ToUpperInvariant());
 
-            // Newest SST files first — most current compacted data
+            // Build SST file-number → CF mapping from MANIFEST so we can restrict
+            // scanning to CF_SHIP (3).  Ghost ships live in CF_BUILDING (4) SSTs and
+            // would otherwise pass the player-GUID check.
+            var cfMapping   = ParseManifestCfMapping(saveDir);
+            bool hasMapping = cfMapping.Count > 0;
+
+            // Newest SST files first — most current compacted data.
+            // Skip SSTs that are definitively mapped to a non-ship CF.
             var ssts = Directory.GetFiles(saveDir, "*.sst")
+                .Where(f =>
+                {
+                    if (!hasMapping) return true;   // no mapping → scan all (safe fallback)
+                    string stem = Path.GetFileNameWithoutExtension(f);
+                    if (!long.TryParse(stem, out long n)) return true;
+                    // Include if mapped to CF_SHIP=3, or if not present in mapping at all.
+                    return !cfMapping.TryGetValue(n, out int cfId) || cfId == CF_SHIP;
+                })
                 .OrderByDescending(f =>
                 {
                     string s = Path.GetFileNameWithoutExtension(f);
@@ -401,9 +643,9 @@ namespace WindroseEditor
                     int valueStart = keyStart + 40;
                     if (BitConverter.ToInt32(raw, valueStart) != (int)valLen) continue;
 
-                    // Must contain the PlayerId string somewhere in first 300 bytes
+                    // Must contain the PlayerId string somewhere in the BSON value
                     bool hasPlayer = false;
-                    int searchEnd = Math.Min(valueStart + 300, raw.Length - pgBytes.Length);
+                    int searchEnd = Math.Min(valueStart + (int)valLen, raw.Length - pgBytes.Length);
                     for (int j = valueStart; j < searchEnd; j++)
                     {
                         bool match = true;
@@ -755,12 +997,24 @@ namespace WindroseEditor
         static string? FindRocksDbDll(string saveDir)
         {
             string exe = AppDomain.CurrentDomain.BaseDirectory;
-            foreach (string candidate in new[]
+
+            // When published as single-file with IncludeNativeLibrariesForSelfExtract=true,
+            // the runtime extracts native DLLs to a temp directory before app code runs.
+            // The path is exposed via AppContext data or the environment variable.
+            string? extractDir = AppContext.GetData("DOTNET_BUNDLE_EXTRACT_BASE_DIR") as string
+                              ?? Environment.GetEnvironmentVariable("DOTNET_BUNDLE_EXTRACT_BASE_DIR");
+
+            var candidates = new List<string>
             {
                 Path.Combine(exe, "rocksdb.dll"),
                 Path.Combine(exe, "..", "rocksdb.dll"),
                 Path.Combine(saveDir, "rocksdb.dll"),
-            })
+            };
+
+            if (extractDir != null)
+                candidates.Insert(0, Path.Combine(extractDir, "rocksdb.dll"));
+
+            foreach (string candidate in candidates)
             {
                 if (File.Exists(candidate)) return Path.GetFullPath(candidate);
             }
