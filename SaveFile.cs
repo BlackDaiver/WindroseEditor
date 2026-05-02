@@ -12,31 +12,54 @@ namespace WindroseEditor
         string NameRu,
         string NameEn,
         string? NameKey,      // localization key (null = use raw string name)
-        string? NameTableId);
+        string? NameTableId,
+        bool IsBoat = false);
 
     // ── Single ship instance ───────────────────────────────────────────────────
     public class ShipInfo
     {
-        public string  Guid          { get; set; } = "";
-        public string  BuildingId    { get; set; } = "";
-        public string  ShipParams    { get; set; } = "";
-        public string  ShipName      { get; set; } = "";
-        public float   HealthPercent { get; set; } = 1f;
-        public int     RewardLevel   { get; set; }
-        public bool    IsFlagship    { get; set; }
-        public bool    IsPossessed   { get; set; }
-        public bool    IsDefault     { get; set; }
-        public bool    IsNew         { get; set; }   // pending write to WAL
-        public bool    IsDeleted     { get; set; }   // pending delete in WAL
-        public BsonDocument RawDoc   { get; set; } = new();
-
-        public string DisplayName =>
-            AppLanguage.IsRu ? (ShipTypeInfo?.NameRu ?? ShipName)
-                             : (ShipTypeInfo?.NameEn ?? ShipName);
+        public string  Guid            { get; set; } = "";
+        public string  BuildingId      { get; set; } = "";
+        public string  ShipParams      { get; set; } = "";
+        public string  ShipName        { get; set; } = "";
+        public float   HealthPercent   { get; set; } = 1f;
+        public int     RewardLevel     { get; set; }
+        public bool    IsFlagship      { get; set; }
+        public bool    IsPossessed     { get; set; }
+        public bool    IsDefault       { get; set; }
+        public bool    IsNew           { get; set; }   // pending write to WAL
+        public bool    IsDeleted       { get; set; }   // pending delete in WAL
+        /// <summary>true when the saved ShipName field is a localization document (not a custom string).</summary>
+        public bool    IsNameLocalized { get; set; }
+        public BsonDocument RawDoc     { get; set; } = new();
 
         public ShipTypeInfo? ShipTypeInfo =>
             SaveFile.KnownShipTypes.FirstOrDefault(
                 t => t.Params.Equals(ShipParams, StringComparison.OrdinalIgnoreCase));
+
+        public bool IsBoat =>
+            ShipTypeInfo?.IsBoat ?? ShipParams.Contains("DA_Ship_Boat", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// User-visible name: custom string name when set, otherwise the localised type name.
+        /// </summary>
+        public string DisplayName
+        {
+            get
+            {
+                // If the BSON stored a localization key, show the type name from our table.
+                if (IsNameLocalized || string.IsNullOrEmpty(ShipName))
+                    return AppLanguage.IsRu
+                        ? (ShipTypeInfo?.NameRu ?? "Ship")
+                        : (ShipTypeInfo?.NameEn ?? "Ship");
+                return ShipName;
+            }
+        }
+
+        /// <summary>Type display name (always from our table, ignores custom ShipName).</summary>
+        public string TypeName =>
+            AppLanguage.IsRu ? (ShipTypeInfo?.NameRu ?? ShipName)
+                             : (ShipTypeInfo?.NameEn ?? ShipName);
     }
 
     public class InventorySlot
@@ -83,19 +106,71 @@ namespace WindroseEditor
         // ── Known ship types ──────────────────────────────────────────────
         public static readonly ShipTypeInfo[] KnownShipTypes =
         {
+            // ── Boat (non-deletable, every player has one) ────────────────
             new("/R5BusinessRules/Ship/Boat/DA_Ship_Boat.DA_Ship_Boat",
                 "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Boat.DA_ShipInventory_Boat",
-                "Шлюп", "Sloop",
-                "Ship_BoatDefault_Name", "ShipUI"),
+                "Лодка", "Boat",
+                "Ship_BoatDefault_Name", "ShipUI",
+                IsBoat: true),
+
+            // ── Cutter (cut content — not in DA_AvailableShipsList, but uses a
+            //           valid PlayerShips blueprint and full customization setup) ──
+            new("/R5BusinessRules/Ship/Cutter/DA_Ship_Cutter.DA_Ship_Cutter",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Cutter.DA_ShipInventory_Cutter",
+                "Каттер (скрытый)", "Cutter (Hidden)",
+                null, null),
+
+            new("/R5BusinessRules/Ship/Cutter/DA_Ship_CutterBlack.DA_Ship_CutterBlack",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Cutter.DA_ShipInventory_Cutter",
+                "Каттер чёрный (скрытый)", "Cutter Black (Hidden)",
+                null, null),
+
+            // ── Ketch ─────────────────────────────────────────────────────
+            new("/R5BusinessRules/Ship/Ketch/DA_Ship_Ketch.DA_Ship_Ketch",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Ketch_Stock.DA_ShipInventory_Ketch_Stock",
+                "Кеч", "Ketch",
+                null, null),
+
+            new("/R5BusinessRules/Ship/Ketch/DA_Ship_Ketch_Blackbeard.DA_Ship_Ketch_Blackbeard",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Ketch_Blackbeard.DA_ShipInventory_Ketch_Blackbeard",
+                "Кеч чернобородцев", "Ketch Blackbeard",
+                null, null),
+
+            new("/R5BusinessRules/Ship/Ketch/DA_Ship_Ketch_Brethren.DA_Ship_Ketch_Brethren",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Ketch_Brethren.DA_ShipInventory_Ketch_Brethren",
+                "Кеч Братства", "Ketch Brethren",
+                null, null),
+
+            // ── Brig ──────────────────────────────────────────────────────
+            new("/R5BusinessRules/Ship/Brig/DA_Ship_Brig.DA_Ship_Brig",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Brig_Stock.DA_ShipInventory_Brig_Stock",
+                "Бриг", "Brig",
+                null, null),
+
+            new("/R5BusinessRules/Ship/Brig/DA_Ship_Brig_Blackbeard.DA_Ship_Brig_Blackbeard",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Brig_Blackbeard.DA_ShipInventory_Brig_Blackbeard",
+                "Бриг чернобородцев", "Brig Blackbeard",
+                null, null),
+
+            new("/R5BusinessRules/Ship/Brig/DA_Ship_Brig_Brethren.DA_Ship_Brig_Brethren",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Brig_Brethren.DA_ShipInventory_Brig_Brethren",
+                "Бриг Братства", "Brig Brethren",
+                null, null),
+
+            // ── Frigate ───────────────────────────────────────────────────
+            new("/R5BusinessRules/Ship/Frigate/DA_Ship_Frigate.DA_Ship_Frigate",
+                "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Frigate_Stock.DA_ShipInventory_Frigate_Stock",
+                "Фрегат", "Frigate",
+                null, null),
 
             new("/R5BusinessRules/Ship/Frigate/DA_Ship_Frigate_Blackbeard.DA_Ship_Frigate_Blackbeard",
                 "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Frigate_Blackbeard.DA_ShipInventory_Frigate_Blackbeard",
-                "Фрегат «Чёрная борода»", "Frigate «Blackbeard»",
+                "Фрегат чернобородцев", "Frigate Blackbeard",
                 null, null),
 
             new("/R5BusinessRules/Ship/Frigate/DA_Ship_Frigate_Brethren.DA_Ship_Frigate_Brethren",
                 "/R5BusinessRules/Inventory/Ship/DA_ShipInventory_Frigate_Brethren.DA_ShipInventory_Frigate_Brethren",
-                "Фрегат «Братья»", "Frigate «Brethren»",
+                "Фрегат Братства", "Frigate Brethren",
                 null, null),
         };
 
@@ -133,11 +208,37 @@ namespace WindroseEditor
                 if (dd != null) defaultId = dd.AsString();
             }
 
+            // ── WAL supersedes SSTs ──────────────────────────────────────
+            // Ships edited via this editor are written to the WAL; the SSTs
+            // are only updated when the game flushes/compacts on next launch.
+            // We must apply WAL changes here so the editor stays consistent
+            // without requiring the game to run between editor sessions.
+            var (walShipPuts, walShipDeletes) =
+                RocksDbAccess.ReadShipWalEntries(_raw.SaveDir);
+
             // Scan SSTs for ship documents
             var shipRaws = RocksDbAccess.ReadShipsFromSst(_raw.SaveDir,
                 string.IsNullOrEmpty(PlayerGuid) ? _raw.SaveDir.Split('\\', '/').Last() : PlayerGuid);
 
+            // Build combined list: SST ships (minus WAL tombstones) + WAL-only ships
+            var combined  = new List<(string guid, byte[] bson)>();
+            var seenGuids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var (guid, bson) in shipRaws)
+            {
+                if (walShipDeletes.Contains(guid)) continue; // deleted in WAL
+                combined.Add((guid, bson));
+                seenGuids.Add(guid);
+            }
+
+            // Ships added via WAL that haven't been compacted into an SST yet
+            foreach (var kvp in walShipPuts)
+            {
+                if (!seenGuids.Contains(kvp.Key))
+                    combined.Add((kvp.Key, kvp.Value));
+            }
+
+            foreach (var (guid, bson) in combined)
             {
                 try
                 {
@@ -163,9 +264,16 @@ namespace WindroseEditor
                     // Name
                     if (doc.TryGetValue("ShipName", out var sn) && sn != null)
                     {
-                        ship.ShipName = sn.IsDocument
-                            ? (sn.AsDocument().Navigate("Key")?.AsString() ?? "Ship")
-                            : sn.AsString();
+                        if (sn.IsDocument)
+                        {
+                            ship.ShipName        = sn.AsDocument().Navigate("Key")?.AsString() ?? "Ship";
+                            ship.IsNameLocalized = true;
+                        }
+                        else
+                        {
+                            ship.ShipName        = sn.AsString();
+                            ship.IsNameLocalized = false;
+                        }
                     }
 
                     // Progression level
@@ -389,13 +497,18 @@ namespace WindroseEditor
                 t => t.Params.Equals(shipParams, StringComparison.OrdinalIgnoreCase));
             if (typeInfo == null) return null;
 
-            // Pick a template — prefer same type, else use any ship
-            BsonDocument? template = _ships
+            // Pick a template — prefer same type, else use any non-deleted ship
+            var templateShip = _ships
+                .Where(s => !s.IsDeleted)
                 .FirstOrDefault(s => s.ShipParams.Equals(shipParams, StringComparison.OrdinalIgnoreCase))
-                ?.RawDoc
-                ?? _ships.FirstOrDefault()?.RawDoc;
+                ?? _ships.FirstOrDefault(s => !s.IsDeleted);
 
-            if (template == null) return null; // no template available
+            if (templateShip == null) return null; // no template available
+
+            BsonDocument template     = templateShip.RawDoc;
+            string templateFolder     = ShipTypeFolder(templateShip.ShipParams);
+            string newTypeFolder      = ShipTypeFolder(typeInfo.Params);
+            bool   sameTypeTemplate   = templateFolder.Equals(newTypeFolder, StringComparison.OrdinalIgnoreCase);
 
             string newGuid       = Guid.NewGuid().ToString("N").ToUpper();
             string newBuildingId = Guid.NewGuid().ToString("N").ToUpper();
@@ -437,13 +550,40 @@ namespace WindroseEditor
             if (doc.TryGetValue("Inventory", out var invV) && invV != null && invV.IsDocument)
             {
                 var invDoc = invV.AsDocument();
-                invDoc["InventoryParams"] = BsonValue.FromString(typeInfo.InventoryParams);
+                // NOTE: InventoryParams is intentionally NOT changed.
+                // The template's module structure must match its InventoryParams;
+                // switching InventoryParams to a different ship type while keeping
+                // the old module layout causes a game crash on load.
 
-                // Clear all module slots
+                // Clear module slots, but PRESERVE the Customization module.
+                // The Customization module holds ship-type-specific visual assets
+                // (sail, flag, hull color).  Clearing it removes required assets and
+                // causes a game crash when the player clicks the ship in the fleet UI.
                 if (invDoc.TryGetValue("Modules", out var modsV) && modsV != null && modsV.IsDocument)
+                {
                     foreach (var (_, mv) in modsV.AsDocument())
-                        if (mv.IsDocument && mv.AsDocument().ContainsKey("Slots"))
-                            mv.AsDocument()["Slots"] = BsonValue.FromDocument(new BsonDocument());
+                    {
+                        if (!mv.IsDocument) continue;
+                        var modDoc = mv.AsDocument();
+
+                        if (IsCustomizationModule(modDoc))
+                        {
+                            // Keep slots intact, but if the template is a different ship type,
+                            // patch the asset paths so they reference the correct type's items.
+                            if (!sameTypeTemplate
+                                && !string.IsNullOrEmpty(templateFolder)
+                                && !string.IsNullOrEmpty(newTypeFolder))
+                            {
+                                PatchCustomizationModuleItems(modDoc, templateFolder, newTypeFolder);
+                            }
+                            continue; // do NOT clear this module
+                        }
+
+                        // Slots is a BSON array (type 0x04) — must use FromArray, not FromDocument.
+                        if (modDoc.ContainsKey("Slots"))
+                            modDoc["Slots"] = BsonValue.FromArray(new BsonDocument());
+                    }
+                }
 
                 // Update DropInventoryPath[1] = new ship guid
                 if (invDoc.TryGetValue("DropInventoryPath", out var dipV) && dipV != null && dipV.IsDocument)
@@ -452,16 +592,16 @@ namespace WindroseEditor
             }
 
             // ── Patch ScenarioSave ───────────────────────────────────────
+            // A brand-new ship has ExecutorId="" (the game fills it in on first use).
+            // Setting it to a GUID that has never been registered crashes the game
+            // when the player clicks the ship in the fleet UI.
             if (doc.TryGetValue("ScenarioSave", out var ssV) && ssV != null && ssV.IsDocument)
             {
-                ssV.AsDocument()["ExecutorId"] = BsonValue.FromString(newGuid);
-                // Clear crew
-                var crew = ssV.AsDocument().Navigate("Crew");
-                if (crew != null && crew.IsDocument)
-                {
-                    crew.AsDocument()["Headcount"]    = BsonValue.FromInt32(0);
-                    crew.AsDocument()["MaxHeadcount"] = BsonValue.FromInt32(0);
-                }
+                ssV.AsDocument()["ExecutorId"] = BsonValue.FromString("");
+                // Do NOT touch Crew — the template already has the correct Headcount /
+                // MaxHeadcount (the game initialises these to 50/50 for a new ship).
+                // Resetting them to 0 leaves the ship with no crew, which the game
+                // treats as invalid and crashes on first click.
             }
 
             // ── Reset Progression ────────────────────────────────────────
@@ -474,13 +614,32 @@ namespace WindroseEditor
                     if (p.TryGetValue(tree, out var tv) && tv != null && tv.IsDocument)
                         if (tv.AsDocument().ContainsKey("Nodes"))
                         {
-                            tv.AsDocument()["Nodes"]             = BsonValue.FromDocument(new BsonDocument());
+                            // Nodes is a BSON array — must use FromArray, not FromDocument.
+                            tv.AsDocument()["Nodes"]             = BsonValue.FromArray(new BsonDocument());
                             tv.AsDocument()["ProgressionPoints"] = BsonValue.FromInt32(0);
                         }
             }
 
-            // ── Reset damage / IslandId ──────────────────────────────────
-            doc["VisualArmorDamages"] = BsonValue.FromDocument(new BsonDocument());
+            // ── Reset location / damage / IslandId ───────────────────────
+            // New ships have no world position (not yet spawned).
+            // Keep the template's WorldLocation/Rotation would leave the new ship
+            // at the template ship's map coordinates, confusing the game.
+            if (doc.TryGetValue("WorldLocation", out var wlV) && wlV != null && wlV.IsDocument)
+            {
+                var wl = wlV.AsDocument();
+                wl["X"] = BsonValue.FromDouble(0.0);
+                wl["Y"] = BsonValue.FromDouble(0.0);
+                wl["Z"] = BsonValue.FromDouble(0.0);
+            }
+            if (doc.TryGetValue("Rotation", out var rotV) && rotV != null && rotV.IsDocument)
+            {
+                var rot = rotV.AsDocument();
+                foreach (var axis in rot.Select(kv => kv.Key).ToList())
+                    rot[axis] = BsonValue.FromDouble(0.0);
+            }
+
+            // VisualArmorDamages is a BSON array — must use FromArray, not FromDocument.
+            doc["VisualArmorDamages"] = BsonValue.FromArray(new BsonDocument());
             doc["IslandId"]           = BsonValue.FromString("");
 
             var ship = new ShipInfo
@@ -505,7 +664,7 @@ namespace WindroseEditor
         {
             var ship = _ships.FirstOrDefault(
                 s => s.Guid.Equals(shipGuid, StringComparison.OrdinalIgnoreCase));
-            if (ship == null || ship.IsDeleted) return false;
+            if (ship == null || ship.IsDeleted || ship.IsBoat) return false;
 
             // Update player BSON
             EnsureShipOwnerDoc();
@@ -532,9 +691,10 @@ namespace WindroseEditor
             var ship = _ships.FirstOrDefault(
                 s => s.Guid.Equals(shipGuid, StringComparison.OrdinalIgnoreCase));
             if (ship == null) return false;
+            if (ship.IsBoat) return false;   // boat is non-deletable
 
-            int remaining = _ships.Count(s => !s.IsDeleted);
-            if (remaining <= 1) return false; // keep at least one ship
+            int remaining = _ships.Count(s => !s.IsDeleted && !s.IsBoat);
+            if (remaining <= 1) return false; // keep at least one non-boat ship
 
             ship.IsDeleted = true;
 
@@ -578,7 +738,7 @@ namespace WindroseEditor
 
             var mod = modVal.AsDocument();
             if (!mod.ContainsKey("Slots"))
-                mod["Slots"] = BsonValue.FromDocument(new BsonDocument());
+                mod["Slots"] = BsonValue.FromArray(new BsonDocument()); // Slots is BSON array
 
             var slotsVal = mod["Slots"];
             if (!slotsVal.IsDocument) return false;
@@ -747,14 +907,14 @@ namespace WindroseEditor
                 byte[] shipKey = System.Text.Encoding.ASCII.GetBytes(ship.Guid.ToUpperInvariant());
                 if (ship.IsDeleted)
                 {
-                    entries.Add(new WalEntry(RocksDbAccess.CF_BUILDING, shipKey, null));
+                    entries.Add(new WalEntry(RocksDbAccess.CF_SHIP, shipKey, null));
                 }
                 else if (ship.IsNew)
                 {
                     try
                     {
                         byte[] shipBson = BsonSerializer.Serialize(ship.RawDoc);
-                        entries.Add(new WalEntry(RocksDbAccess.CF_BUILDING, shipKey, shipBson));
+                        entries.Add(new WalEntry(RocksDbAccess.CF_SHIP, shipKey, shipBson));
                     }
                     catch (Exception ex) { return (false, $"Ship serialization error: {ex.Message}"); }
                 }
@@ -898,6 +1058,72 @@ namespace WindroseEditor
                 if (st != null && !string.IsNullOrEmpty(st.AsString())) used++;
             }
             return used;
+        }
+
+        /// <summary>
+        /// Extracts the ship type folder from a ship params path.
+        /// "/R5BusinessRules/Ship/Ketch/DA_Ship_Ketch.DA_Ship_Ketch" → "Ketch"
+        /// </summary>
+        static string ShipTypeFolder(string shipParams)
+        {
+            var parts = shipParams.Split('/');
+            for (int i = 0; i < parts.Length - 1; i++)
+                if (string.Equals(parts[i], "Ship", StringComparison.OrdinalIgnoreCase))
+                    return parts[i + 1];
+            return "";
+        }
+
+        /// <summary>
+        /// Returns true if the module contains customization items (sail / flag / hull color).
+        /// These slots must be kept so the game can render the ship.
+        /// </summary>
+        static bool IsCustomizationModule(BsonDocument mod)
+        {
+            if (!mod.TryGetValue("Slots", out var sv) || sv == null || !sv.IsDocument) return false;
+            foreach (var (_, slotVal) in sv.AsDocument())
+            {
+                if (!slotVal.IsDocument) continue;
+                var path = slotVal.AsDocument().Navigate("ItemsStack.Item.ItemParams");
+                if (path != null && path.Type == BsonType.String
+                    && path.AsString().Contains("ShipCustomization", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Replaces the ship-type segment inside customization item asset paths so the
+        /// new ship references its own type's assets instead of the template's.
+        /// E.g. "DA_EID_ShipCustomization_Ketch_Sail_Stock_Origin"
+        ///   → "DA_EID_ShipCustomization_Frigate_Sail_Stock_Origin"
+        /// </summary>
+        static void PatchCustomizationModuleItems(BsonDocument mod, string fromType, string toType)
+        {
+            if (!mod.TryGetValue("Slots", out var sv) || sv == null || !sv.IsDocument) return;
+            foreach (var (_, slotVal) in sv.AsDocument())
+            {
+                if (!slotVal.IsDocument) continue;
+                var itemDoc = slotVal.AsDocument().Navigate("ItemsStack.Item")?.AsDocument();
+                if (itemDoc == null) continue;
+                if (!itemDoc.TryGetValue("ItemParams", out var ipv) || ipv == null
+                    || ipv.Type != BsonType.String) continue;
+                string path = ipv.AsString();
+                if (!path.Contains("ShipCustomization", StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Replace both the folder segment and the DA_ asset name segment.
+                // Folder:  "/ShipCustomization/Ketch/"  → "/ShipCustomization/Frigate/"
+                // Asset name: "_Ketch_" → "_Frigate_"
+                string newPath = path
+                    .Replace($"/ShipCustomization/{fromType}/",
+                             $"/ShipCustomization/{toType}/",
+                             StringComparison.OrdinalIgnoreCase)
+                    .Replace($"ShipCustomization_{fromType}_",
+                             $"ShipCustomization_{toType}_",
+                             StringComparison.OrdinalIgnoreCase);
+
+                if (newPath != path)
+                    itemDoc["ItemParams"] = BsonValue.FromString(newPath);
+            }
         }
 
         static string ResolveSaveDir(string path)
