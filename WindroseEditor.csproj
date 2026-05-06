@@ -19,6 +19,7 @@
 	<None Update="rocksdb.dll">
 	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+	  <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
 	</None>
 	<None Update="windrose_items.db">
 	  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
