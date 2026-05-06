@@ -80,7 +80,7 @@ namespace WindroseEditor
 
         public MainForm()
         {
-            Text          = "Windrose — Редактор инвентаря  v1.0.1";
+            Text          = "Windrose — Редактор инвентаря  v1.0.2";
             Size          = new Size(1000, 750);
             MinimumSize   = new Size(820, 560);
             BackColor     = Theme.BG2;
@@ -748,7 +748,7 @@ namespace WindroseEditor
             _langBtn.ForeColor = AppLanguage.IsRu ? Theme.Accent : Theme.Warn;
 
             // ── Заголовок окна ───────────────────────────────────────────────
-            Text = $"Windrose — {AppLanguage.T("Редактор инвентаря", "Inventory Editor")}  v1.0.1";
+            Text = $"Windrose — {AppLanguage.T("Редактор инвентаря", "Inventory Editor")}  v1.0.2";
 
             // ── Кнопки тулбара ────────────────────────────────────────────────
             _loadBtn.Text  = AppLanguage.T("Загрузить",       "Load");
