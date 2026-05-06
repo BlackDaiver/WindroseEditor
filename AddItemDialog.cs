@@ -437,7 +437,7 @@ namespace WindroseEditor
             // ── Количество ───────────────────────────────────────────
             int maxCnt = item.MaxCountInSlot > 0 ? item.MaxCountInSlot : 9999;
             _countSpin.Maximum = maxCnt;
-            if (_countSpin.Value > maxCnt) _countSpin.Value = maxCnt;
+            _countSpin.Value   = maxCnt;   // по умолчанию — максимум
             _cntLabel.Text = AppLanguage.T($"Кол-во (1–{maxCnt}):", $"Count (1–{maxCnt}):");
 
             bottomPanel?.PerformLayout();

@@ -777,11 +777,26 @@ namespace WindroseEditor
             stackDoc["Count"] = BsonValue.FromInt32(count);
             stackDoc["Item"]  = BsonValue.FromDocument(itemDoc);
 
+            // Preserve the existing SlotId — the game assigns SlotIds that do NOT always
+            // follow slotIndex+1 (e.g. array key 13 may have SlotId=13, not 14, because
+            // an earlier slot already claimed that ID and slot 14 was skipped).
+            // Reading the existing value is the only reliable way to match what the game
+            // will write when it adds an item to the same slot.
+            // Fall back to slotIndex+1 only for brand-new slots not yet present in BSON.
+            int slotId = slotIndex + 1;
+            if (slots.TryGetValue(slotIndex.ToString(), out var existingSlotBson)
+                && existingSlotBson != null && existingSlotBson.IsDocument
+                && existingSlotBson.AsDocument().TryGetValue("SlotId", out var existingSid)
+                && existingSid != null)
+            {
+                slotId = (int)existingSid.TryAsLong();
+            }
+
             // Slot document
             var slotDoc = new BsonDocument();
             slotDoc["IsPersonalSlot"] = BsonValue.FromBool(false);
             slotDoc["ItemsStack"]     = BsonValue.FromDocument(stackDoc);
-            slotDoc["SlotId"]         = BsonValue.FromInt32(slotIndex);
+            slotDoc["SlotId"]         = BsonValue.FromInt32(slotId);
             slotDoc["SlotParams"]     = BsonValue.FromString(
                 "/R5BusinessRules/Inventory/SlotsParams/DA_BL_Slot_Default.DA_BL_Slot_Default");
 
@@ -901,6 +916,14 @@ namespace WindroseEditor
 
             var entries = new List<WalEntry>();
             entries.Add(new WalEntry(_raw.CfId, _raw.PlayerKey, newBson));
+            // The game reads player inventory from CF2 (R5BLPlayer), but the editor
+            // may detect CF5 (R5BLActor_BuildingBlock) as primary because it has a
+            // higher SST file number. Writing to BOTH CFs ensures the game sees our
+            // changes regardless of which CF it uses as the authoritative source.
+            int otherPlayerCf = (_raw.CfId == RocksDbAccess.CF_PLAYER)
+                ? RocksDbAccess.CF_ACTOR
+                : RocksDbAccess.CF_PLAYER;
+            entries.Add(new WalEntry(otherPlayerCf, _raw.PlayerKey, newBson));
 
             foreach (var ship in _ships)
             {
@@ -920,30 +943,28 @@ namespace WindroseEditor
                 }
             }
 
-            var (manifestSeq, nextFileNum, _) = RocksDbAccess.ParseManifest(_raw.SaveDir);
-
-            // Use the sequence from where we actually read the data (WAL batch header or
-            // SST placeholder), not the manifest's LastSequence — the manifest is only
-            // updated on compaction/flush and can lag behind the current WAL.
-            // _raw.Sequence == 99999 means we loaded from SST; fall back to manifest seq.
-            long baseSeq  = (_raw.Sequence > 0 && _raw.Sequence != 99999)
-                            ? _raw.Sequence
-                            : (manifestSeq > 0 ? manifestSeq : 50000);
-            long writeSeq = baseSeq + 1;
-
-            // nextFileNum is the MANIFEST's global counter — guaranteed not to conflict
-            // with any existing SST or WAL file numbers.  Pass 0 only as a last resort
-            // (ParseManifest returns 0 when it can't read the manifest), in which case
-            // WriteWal falls back to scanning ALL numbered files in the directory.
-            bool ok = RocksDbAccess.WriteWalMulti(_raw.SaveDir, writeSeq, nextFileNum, entries);
-            if (!ok) return (false, "Failed to write WAL file. Check permissions.");
+            // ── Direct DB write + checkpoint + ZIP ─────────────────────────────
+            //
+            // The game IGNORES WAL files: on every launch it restores the live DB
+            // from _Latest.zip (SSTs only), discarding any WAL we injected.
+            // The only reliable path is: open the live DB in write mode via the
+            // rocksdb.dll, write the BSON with put_cf, force a flush to SST, then
+            // create a checkpoint and package it as the new _Latest.zip.
+            // The game restores that ZIP at next launch and sees our items.
+            var (zipError, zipPath) = RocksDbAccess.WriteDirectAndCheckpoint(_raw.SaveDir, entries);
 
             // Reset ship flags
             _ships.RemoveAll(s => s.IsDeleted);
             foreach (var ship in _ships) ship.IsNew = false;
 
             IsModified = false;
-            return (true, "");
+
+            if (zipError != null)
+                return (false,
+                    $"Ошибка прямой записи в БД:\n{zipError}\n\n" +
+                    "Убедитесь, что игра закрыта, и повторите сохранение.");
+
+            return (true, zipPath!);
         }
 
         public string CreateBackup()
@@ -1124,6 +1145,116 @@ namespace WindroseEditor
                 if (newPath != path)
                     itemDoc["ItemParams"] = BsonValue.FromString(newPath);
             }
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // ZIP → Live RocksDB extraction
+        // Extracts a _Latest.zip backup into the live RocksDB directory so the
+        // editor can open it, while keeping the path structure that lets
+        // WriteDirectAndCheckpoint find the ZIP for saving.
+        // ──────────────────────────────────────────────────────────────────
+        public static (string liveDir, string error) PrepareFromZip(string zipPath)
+        {
+            if (!File.Exists(zipPath))
+                return ("", $"ZIP not found: {zipPath}");
+
+            // Parse GUID from parent folder name
+            string guid    = Path.GetFileName(Path.GetDirectoryName(zipPath) ?? "");
+            // Parse version from filename: <GUID>_<VERSION>_Latest.zip
+            string fname   = Path.GetFileNameWithoutExtension(zipPath); // e.g. C0F5..._0.10.0_Latest
+            string version = "0.10.0"; // default
+            {
+                // strip GUID prefix + underscore, strip _Latest suffix
+                if (fname.Length > guid.Length + 1)
+                {
+                    string after = fname[(guid.Length + 1)..]; // e.g. "0.10.0_Latest"
+                    int lastUnder = after.LastIndexOf('_');
+                    if (lastUnder > 0) version = after[..lastUnder];
+                }
+            }
+
+            // Build live DB path:
+            //   ZIP: <root>/RocksDB_v2_Backups/Players/<guid>/<zip>
+            //   Live: <root>/RocksDB_v2/<version>/Players/<guid>
+            string? guidDir      = Path.GetDirectoryName(zipPath);              // .../Players/<guid>
+            string? playersDir   = Path.GetDirectoryName(guidDir ?? "");        // .../Players
+            string? backupDir    = Path.GetDirectoryName(playersDir ?? "");     // .../RocksDB_v2_Backups
+            string? root         = Path.GetDirectoryName(backupDir ?? "");      // ...<steamId>
+
+            if (root == null)
+                return ("", "Cannot determine root folder from ZIP path");
+
+            string liveDir = Path.Combine(root, "RocksDB_v2", version, "Players", guid);
+
+            // Remove existing live dir (clear stale state)
+            if (Directory.Exists(liveDir))
+            {
+                // Release LOCK file if locked
+                string lockFile = Path.Combine(liveDir, "LOCK");
+                try { if (File.Exists(lockFile)) File.Delete(lockFile); } catch { /* ignore */ }
+                try { Directory.Delete(liveDir, recursive: true); } catch { /* ignore */ }
+            }
+            Directory.CreateDirectory(liveDir);
+
+            // Extract ZIP entries
+            try
+            {
+                using var zf = System.IO.Compression.ZipFile.OpenRead(zipPath);
+                foreach (var entry in zf.Entries)
+                {
+                    string name = entry.FullName;
+                    string? outName = null;
+
+                    if (name.StartsWith("Checkpoint/shared_checksum/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string baseName = Path.GetFileName(name);
+                        if (string.IsNullOrEmpty(baseName)) continue;
+
+                        if (baseName.EndsWith(".blob", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // e.g. "000018_590266782_175.blob" → "000018.blob"
+                            string numStr = baseName.Split('_')[0];
+                            outName = numStr + ".blob";
+                        }
+                        else if (baseName.EndsWith(".sst", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // e.g. "171130_sSESSIONID_1398515.sst" → "171130.sst"
+                            string numStr = baseName.Split('_')[0];
+                            outName = numStr + ".sst";
+                        }
+                    }
+                    else if (name.StartsWith("Checkpoint/private/1/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string baseName = Path.GetFileName(name);
+                        if (!string.IsNullOrEmpty(baseName))
+                            outName = baseName;
+                    }
+
+                    if (outName == null) continue;
+
+                    string outPath = Path.Combine(liveDir, outName);
+                    using var src = entry.Open();
+                    using var dst = File.Create(outPath);
+                    src.CopyTo(dst);
+                }
+            }
+            catch (Exception ex)
+            {
+                return ("", $"ZIP extraction failed: {ex.Message}");
+            }
+
+            // Create IDENTITY if missing
+            string identity = Path.Combine(liveDir, "IDENTITY");
+            if (!File.Exists(identity))
+                File.WriteAllText(identity, Guid.NewGuid().ToString() + "\n");
+
+            // Create empty LOCK
+            File.WriteAllText(Path.Combine(liveDir, "LOCK"), "");
+
+            if (!File.Exists(Path.Combine(liveDir, "CURRENT")))
+                return ("", "ZIP extracted but no CURRENT file found — ZIP may be corrupted");
+
+            return (liveDir, "");
         }
 
         static string ResolveSaveDir(string path)

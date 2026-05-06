@@ -100,7 +100,7 @@ namespace WindroseEditor
 
             _pathBox = new TextBox
             {
-                PlaceholderText = @"Путь к папке Players\<GUID>",
+                PlaceholderText = @"Путь к ZIP архиву (*_Latest.zip) или папке Players\<GUID>",
                 BackColor = Theme.SlotBg, ForeColor = Theme.Text,
                 BorderStyle = BorderStyle.FixedSingle, Font = Font,
             };
@@ -339,13 +339,27 @@ namespace WindroseEditor
 
         void Browse()
         {
-            using var d = new FolderBrowserDialog
+            // Try to start in the backups folder
+            string startDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string r5Backups = Path.Combine(startDir, "R5", "Saved", "SaveProfiles");
+            if (Directory.Exists(r5Backups)) startDir = r5Backups;
+
+            // Current path might already point somewhere useful
+            string cur = _pathBox.Text.Trim();
+            if (cur.Length > 3)
             {
-                Description = "Выберите папку Players\\<GUID>",
-                UseDescriptionForTitle = true,
+                string d2 = File.Exists(cur) ? Path.GetDirectoryName(cur)! : cur;
+                if (Directory.Exists(d2)) startDir = d2;
+            }
+
+            using var ofd = new OpenFileDialog
+            {
+                Title            = "Выберите ZIP архив сохранения (*_Latest.zip)",
+                Filter           = "ZIP сохранение|*_Latest.zip|Все ZIP|*.zip|Все файлы|*.*",
+                InitialDirectory = startDir,
             };
-            if (_pathBox.Text.Length > 3) d.InitialDirectory = _pathBox.Text;
-            if (d.ShowDialog() == DialogResult.OK) _pathBox.Text = d.SelectedPath;
+            if (ofd.ShowDialog() == DialogResult.OK)
+                _pathBox.Text = ofd.FileName;
         }
 
         new void Load()
@@ -357,7 +371,23 @@ namespace WindroseEditor
             Cursor = Cursors.WaitCursor;
             try
             {
-                var (file, err) = SaveFile.Load(path);
+                // If user selected a ZIP — extract it to the live RocksDB dir first
+                string loadPath = path;
+                if (path.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+                {
+                    SetStatus("Распаковываю ZIP…");
+                    Application.DoEvents(); // refresh UI
+
+                    var (liveDir, extractErr) = SaveFile.PrepareFromZip(path);
+                    if (!string.IsNullOrEmpty(extractErr))
+                    {
+                        SetStatus($"Ошибка распаковки ZIP: {extractErr}", warn: true);
+                        return;
+                    }
+                    loadPath = liveDir;
+                }
+
+                var (file, err) = SaveFile.Load(loadPath);
                 if (file == null) { SetStatus(err, warn: true); return; }
                 _save = file;
                 SetStatus($"Загружено  ·  {_save.PlayerGuid}");
@@ -383,9 +413,22 @@ namespace WindroseEditor
                 return;
 
             string bk = _save.CreateBackup();
-            var (ok, err) = _save.Save();
-            SetStatus(ok ? $"Сохранено. Бэкап: {bk}" : $"Ошибка: {err}", warn: !ok);
-            if (!ok) MessageBox.Show(err, "Ошибка", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            var (ok, info) = _save.Save();
+            if (ok)
+            {
+                // info contains the path of the ZIP that was updated
+                string zipName = string.IsNullOrEmpty(info) ? "?" : Path.GetFileName(info);
+                SetStatus(AppLanguage.T(
+                    $"Сохранено ✓  ZIP: {zipName}  Бэкап: {bk}",
+                    $"Saved ✓  ZIP: {zipName}  Backup: {bk}"));
+            }
+            else
+            {
+                SetStatus(AppLanguage.T($"Ошибка сохранения: {info}", $"Save error: {info}"), warn: true);
+                MessageBox.Show(info,
+                    AppLanguage.T("Ошибка сохранения", "Save error"),
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         // ── Module role detection ─────────────────────────────────────────────
@@ -715,8 +758,8 @@ namespace WindroseEditor
 
             // ── Placeholder путевого поля ─────────────────────────────────────
             _pathBox.PlaceholderText = AppLanguage.T(
-                @"Путь к папке Players\<GUID>",
-                @"Path to Players\<GUID> folder");
+                @"Путь к ZIP архиву (*_Latest.zip) или папке Players\<GUID>",
+                @"Path to *_Latest.zip or Players\<GUID> folder");
 
             // ── Заголовки секций инвентаря ────────────────────────────────────
             _actionBarSec.Title  = AppLanguage.T("Панель действий",  "Action Bar");
